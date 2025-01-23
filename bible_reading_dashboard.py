@@ -1,106 +1,73 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import numpy as np
 import io
 
 # Page config
 st.set_page_config(page_title="Bible Reading Schedule", layout="wide")
 
+def create_time_slots():
+    """Create all possible 30-minute time slots"""
+    slots = []
+    for hour in range(24):
+        for minute in [0, 30]:
+            time = f"{hour:02d}:{minute:02d}"
+            # Convert to 12-hour format
+            dt = datetime.strptime(time, "%H:%M")
+            slots.append(dt.strftime("%I:%M %p").lstrip("0").lower())
+    return slots
+
 def get_location(day, time_str):
     """Determine location based on day and time"""
     try:
-        # Extract the time part (e.g., "5:00 pm" from "5:00 pm Jan 29")
-        time = ' '.join(time_str.split()[:2]).lower()
-        hour = int(time.split(':')[0])
-        is_pm = 'pm' in time
-        hour_24 = hour + 12 if (is_pm and hour != 12) else hour
+        # Parse the time
+        time = datetime.strptime(time_str, "%I:%M %p").time()
+        hour = time.hour
         
         day = day.lower()
         
         # Torrance: Monday 9am to Wednesday 5pm
-        if day == 'monday' and hour_24 >= 9:
+        if day == 'monday' and hour >= 9:
             return 'Torrance'
         if day == 'tuesday':
             return 'Torrance'
-        if day == 'wednesday' and hour_24 < 17:
+        if day == 'wednesday' and hour < 17:
             return 'Torrance'
         
         # Manhattan Beach: Wednesday 5pm through Saturday 2pm
-        if day == 'wednesday' and hour_24 >= 17:
+        if day == 'wednesday' and hour >= 17:
             return 'Manhattan Beach'
         if day in ['thursday', 'friday']:
             return 'Manhattan Beach'
-        if day == 'saturday' and hour_24 < 14:
+        if day == 'saturday' and hour < 14:
             return 'Manhattan Beach'
         
         return None
     except:
         return None
 
-def extract_time_columns(df):
-    """Extract time columns from the dataframe"""
-    time_cols = []
-    for col in df.columns:
-        # Check if column matches pattern like "5:00 pm Jan 29"
-        if any(x in col for x in ['am', 'pm']) and any(month in col for month in ['Jan', 'Feb']):
-            time_cols.append(col)
-    return time_cols
-
-def standardize_time_format(time_str):
-    """Standardize time string format"""
-    # Split into components
-    parts = time_str.split()
-    
-    # Handle cases where am/pm is attached to time
-    if len(parts) == 3 and ('am' in parts[0].lower() or 'pm' in parts[0].lower()):
-        time = parts[0]
-        # Insert space before am/pm
-        if 'am' in time.lower():
-            time = time.lower().replace('am', ' am')
-        if 'pm' in time.lower():
-            time = time.lower().replace('pm', ' pm')
-        # Reconstruct string
-        return f"{time} {parts[1]} {parts[2]}"
-    
-    return time_str
-
 def process_registrations(df):
-    """Process registration data into schedule format"""
-    # Get all unique time slots from column names and standardize format
-    time_cols = extract_time_columns(df)
-    standardized_times = {col: standardize_time_format(col) for col in time_cols}
-    
-    # Sort time slots
-    time_slots = sorted(time_cols, 
-                       key=lambda x: datetime.strptime(standardize_time_format(x), '%I:%M %p %b %d'))
-    
+    """Process registration data into structured schedule"""
+    # Create time slots
+    time_slots = create_time_slots()
     days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
     
-    # Create empty schedule
+    # Initialize empty schedule
     schedule_data = []
     
     for time_slot in time_slots:
-        # Extract just the time part for display
-        display_time = ' '.join(standardize_time_format(time_slot).split()[:2])
-        row = {'Time': display_time}
+        row = {'Time': time_slot}
         
         for day in days:
             row[day] = ''
             location = get_location(day, time_slot)
             if location:
-                # Find all registrations for this day and time
-                names = []
-                for _, reg in df.iterrows():
-                    if reg['Status'] == 'Active':
-                        reg_day = reg['Selection'].split(' at ')[0]
-                        reg_location = reg['Selection'].split(' at ')[1]
-                        
-                        if day in reg_day and location == reg_location:
-                            if time_slot in reg and reg[time_slot] == 1:
-                                names.append(f"{reg['First Name']} {reg['Last Name']}")
-                
-                row[day] = ', '.join(names) if names else ''
+                # Find matching registration
+                mask = (df['Time'].str.lower() == time_slot.lower()) & \
+                       (df[day].notna())
+                if any(mask):
+                    row[day] = df.loc[mask, day].iloc[0]
         
         schedule_data.append(row)
     
@@ -121,8 +88,15 @@ def export_to_excel(df):
         format_torrance = writer.book.add_format({'bg_color': '#E6F3FF'})
         format_manhattan = writer.book.add_format({'bg_color': '#E6FFE6'})
         
-        # Apply conditional formatting based on location
-        # (This would need to be implemented based on your specific needs)
+        # Apply colors to locations
+        for row_num in range(1, len(df) + 1):
+            time = df.iloc[row_num-1]['Time']
+            for col_num, day in enumerate(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'], 1):
+                location = get_location(day, time)
+                if location == 'Torrance':
+                    worksheet.write(row_num, col_num, df.iloc[row_num-1][day], format_torrance)
+                elif location == 'Manhattan Beach':
+                    worksheet.write(row_num, col_num, df.iloc[row_num-1][day], format_manhattan)
     
     return buffer
 
@@ -142,7 +116,8 @@ def main():
         try:
             # Read and process data
             df = pd.read_csv(uploaded_file)
-            st.write("Processing registrations...")
+            
+            # Process the schedule
             schedule_df = process_registrations(df)
             
             # Display schedule
@@ -169,9 +144,9 @@ def main():
             
             # Debug information
             if st.checkbox("Show Debug Info"):
-                st.write("Time Columns Found:", extract_time_columns(df))
-                st.write("Sample Registration:", df.iloc[0][['First Name', 'Last Name', 'Selection', 'Status']].to_dict())
-            
+                st.write("Sample Time Slots:", create_time_slots()[:10])
+                st.write("Sample Row:", df.iloc[0].to_dict())
+                
         except Exception as e:
             st.error(f"Error processing file: {str(e)}")
             st.write("Error details:", e)
