@@ -7,13 +7,13 @@ import io
 # Page config
 st.set_page_config(page_title="Bible Reading Schedule", layout="wide")
 
-def get_location(day, time):
+def get_location(day, time_str):
     """Determine location based on day and time"""
-    # Convert time to 24-hour format for comparison
     try:
-        time_str = time.lower()
-        hour = int(time_str.split(':')[0])
-        is_pm = 'pm' in time_str
+        # Extract the time part (e.g., "5:00 pm" from "5:00 pm Jan 29")
+        time = ' '.join(time_str.split()[:2]).lower()
+        hour = int(time.split(':')[0])
+        is_pm = 'pm' in time
         hour_24 = hour + 12 if (is_pm and hour != 12) else hour
         
         day = day.lower()
@@ -38,13 +38,20 @@ def get_location(day, time):
     except:
         return None
 
+def extract_time_columns(df):
+    """Extract time columns from the dataframe"""
+    time_cols = []
+    for col in df.columns:
+        # Check if column matches pattern like "5:00 pm Jan 29"
+        if any(x in col for x in ['am', 'pm']) and any(month in col for month in ['Jan', 'Feb']):
+            time_cols.append(col)
+    return time_cols
+
 def process_registrations(df):
     """Process registration data into schedule format"""
-    # Generate time slots
-    time_slots = []
-    for hour in range(24):
-        for minute in [0, 30]:
-            time_slots.append(f"{hour if hour <= 12 else hour-12}:{minute:02d} {'am' if hour < 12 else 'pm'}")
+    # Get all unique time slots from column names
+    time_cols = extract_time_columns(df)
+    time_slots = sorted(time_cols, key=lambda x: datetime.strptime(x, '%I:%M %p %b %d'))
     
     days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
     
@@ -52,7 +59,10 @@ def process_registrations(df):
     schedule_data = []
     
     for time_slot in time_slots:
-        row = {'Time': time_slot}
+        # Extract just the time part for display
+        display_time = ' '.join(time_slot.split()[:2])
+        row = {'Time': display_time}
+        
         for day in days:
             row[day] = ''
             location = get_location(day, time_slot)
@@ -65,8 +75,7 @@ def process_registrations(df):
                         reg_location = reg['Selection'].split(' at ')[1]
                         
                         if day in reg_day and location == reg_location:
-                            time_col = time_slot.lower()
-                            if time_col in reg and reg[time_col] == 1:
+                            if time_slot in reg and reg[time_slot] == 1:
                                 names.append(f"{reg['First Name']} {reg['Last Name']}")
                 
                 row[day] = ', '.join(names) if names else ''
@@ -85,6 +94,13 @@ def export_to_excel(df):
         # Format columns
         worksheet.set_column('A:A', 15)  # Time column
         worksheet.set_column('B:G', 30)  # Day columns
+        
+        # Add color formatting
+        format_torrance = writer.book.add_format({'bg_color': '#E6F3FF'})
+        format_manhattan = writer.book.add_format({'bg_color': '#E6FFE6'})
+        
+        # Apply conditional formatting based on location
+        # (This would need to be implemented based on your specific needs)
     
     return buffer
 
@@ -104,6 +120,7 @@ def main():
         try:
             # Read and process data
             df = pd.read_csv(uploaded_file)
+            st.write("Processing registrations...")
             schedule_df = process_registrations(df)
             
             # Display schedule
@@ -128,8 +145,14 @@ def main():
             # Show last update time
             st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             
+            # Debug information
+            if st.checkbox("Show Debug Info"):
+                st.write("Time Columns Found:", extract_time_columns(df))
+                st.write("Sample Registration:", df.iloc[0][['First Name', 'Last Name', 'Selection', 'Status']].to_dict())
+            
         except Exception as e:
             st.error(f"Error processing file: {str(e)}")
+            st.write("Error details:", e)
     else:
         st.info("Please upload a CSV file to view the schedule")
 
