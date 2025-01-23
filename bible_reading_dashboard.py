@@ -1,30 +1,28 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
-import numpy as np
+from datetime import datetime
 import io
 
 # Page config
 st.set_page_config(page_title="Bible Reading Schedule", layout="wide")
 
-def create_time_slots():
-    """Create all possible 30-minute time slots"""
-    slots = []
-    for hour in range(24):
-        for minute in [0, 30]:
-            time = f"{hour:02d}:{minute:02d}"
-            # Convert to 12-hour format
-            dt = datetime.strptime(time, "%H:%M")
-            slots.append(dt.strftime("%I:%M %p").lstrip("0").lower())
-    return slots
-
 def get_location(day, time_str):
     """Determine location based on day and time"""
     try:
-        # Parse the time
-        time = datetime.strptime(time_str, "%I:%M %p").time()
-        hour = time.hour
+        # Convert 12-hour time to 24-hour for comparison
+        time_parts = time_str.replace("  ", " ").split()
+        if len(time_parts) < 2:
+            return None
+            
+        time = time_parts[0]
+        ampm = time_parts[1].lower()
         
+        hour = int(time.split(":")[0])
+        if ampm == "pm" and hour != 12:
+            hour += 12
+        elif ampm == "am" and hour == 12:
+            hour = 0
+            
         day = day.lower()
         
         # Torrance: Monday 9am to Wednesday 5pm
@@ -44,39 +42,39 @@ def get_location(day, time_str):
             return 'Manhattan Beach'
         
         return None
-    except:
+    except Exception as e:
+        print(f"Error in get_location: {e} for day={day}, time={time_str}")
         return None
 
-def process_registrations(df):
-    """Process registration data into structured schedule"""
-    # Create time slots
-    time_slots = create_time_slots()
+def add_location_colors(df):
+    """Add background colors based on location"""
     days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+    styled_df = df.style
     
-    # Initialize empty schedule
-    schedule_data = []
+    # Add background colors
+    def apply_colors(row):
+        colors = []
+        for col in df.columns:
+            if col == 'Time':
+                colors.append('')
+            else:
+                location = get_location(col, row['Time'])
+                if location == 'Torrance':
+                    colors.append('background-color: #E6F3FF')
+                elif location == 'Manhattan Beach':
+                    colors.append('background-color: #E6FFE6')
+                else:
+                    colors.append('')
+        return colors
     
-    for time_slot in time_slots:
-        row = {'Time': time_slot}
-        
-        for day in days:
-            row[day] = ''
-            location = get_location(day, time_slot)
-            if location:
-                # Find matching registration
-                mask = (df['Time'].str.lower() == time_slot.lower()) & \
-                       (df[day].notna())
-                if any(mask):
-                    row[day] = df.loc[mask, day].iloc[0]
-        
-        schedule_data.append(row)
-    
-    return pd.DataFrame(schedule_data)
+    styled_df = df.style.apply(apply_colors, axis=1)
+    return styled_df
 
 def export_to_excel(df):
     """Create formatted Excel file"""
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        # Write the data
         df.to_excel(writer, sheet_name='Schedule', index=False)
         worksheet = writer.sheets['Schedule']
         
@@ -84,11 +82,11 @@ def export_to_excel(df):
         worksheet.set_column('A:A', 15)  # Time column
         worksheet.set_column('B:G', 30)  # Day columns
         
-        # Add color formatting
+        # Add formats
         format_torrance = writer.book.add_format({'bg_color': '#E6F3FF'})
         format_manhattan = writer.book.add_format({'bg_color': '#E6FFE6'})
         
-        # Apply colors to locations
+        # Apply colors based on location
         for row_num in range(1, len(df) + 1):
             time = df.iloc[row_num-1]['Time']
             for col_num, day in enumerate(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'], 1):
@@ -110,28 +108,32 @@ def main():
     """)
     
     # File upload
-    uploaded_file = st.file_uploader("Upload registration CSV file", type=['csv'])
+    uploaded_file = st.file_uploader("Upload schedule CSV file", type=['csv'])
     
     if uploaded_file:
         try:
-            # Read and process data
+            # Read CSV data
             df = pd.read_csv(uploaded_file)
             
-            # Process the schedule
-            schedule_df = process_registrations(df)
+            # Verify required columns
+            required_columns = ['Time', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+            if not all(col in df.columns for col in required_columns):
+                st.error("CSV file must contain columns: Time, Monday, Tuesday, Wednesday, Thursday, Friday, Saturday")
+                return
             
-            # Display schedule
+            # Display schedule with colors
             st.markdown("### Current Schedule")
+            styled_df = add_location_colors(df)
             st.dataframe(
-                schedule_df,
+                styled_df,
                 hide_index=True,
                 use_container_width=True
             )
             
-            # Export buttons
+            # Export button
             col1, col2 = st.columns([1, 5])
             with col1:
-                excel_file = export_to_excel(schedule_df)
+                excel_file = export_to_excel(df)
                 st.download_button(
                     label="Download Excel",
                     data=excel_file.getvalue(),
@@ -144,8 +146,8 @@ def main():
             
             # Debug information
             if st.checkbox("Show Debug Info"):
-                st.write("Sample Time Slots:", create_time_slots()[:10])
-                st.write("Sample Row:", df.iloc[0].to_dict())
+                st.write("Columns in file:", df.columns.tolist())
+                st.write("First few rows:", df.head())
                 
         except Exception as e:
             st.error(f"Error processing file: {str(e)}")
