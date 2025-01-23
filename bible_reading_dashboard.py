@@ -6,23 +6,79 @@ import io
 # Page config
 st.set_page_config(page_title="Bible Reading Schedule", layout="wide")
 
+def parse_time_column(col_name):
+    """Extract time and date from column name like '5:00 pm Jan 29'"""
+    try:
+        parts = col_name.split()
+        if len(parts) >= 4:  # Normal format "5:00 pm Jan 29"
+            time = f"{parts[0]} {parts[1]}"
+            date = f"{parts[2]} {parts[3]}"
+            return time.lower(), date
+        elif 'am' in col_name.lower() or 'pm' in col_name.lower():  # Handle any variations
+            return col_name.lower(), ''
+        return None, None
+    except:
+        return None, None
+
+def get_day_of_week(date_str):
+    """Convert 'Jan 29' to day of week"""
+    try:
+        # Add year 2025 since we know the dates
+        full_date = f"{date_str} 2025"
+        date_obj = datetime.strptime(full_date, '%b %d %Y')
+        return date_obj.strftime('%A')
+    except:
+        return None
+
+def process_registrations(df):
+    """Convert registration data into schedule format"""
+    # Initialize schedule structure
+    schedule = {}
+    days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+    
+    # Process each time slot column
+    for col in df.columns:
+        time, date = parse_time_column(col)
+        if time and date:
+            day = get_day_of_week(date)
+            if day in days:
+                # Find all people registered for this time slot
+                registered = df[df[col] == 1]
+                if not registered.empty:
+                    names = [f"{row['First Name']} {row['Last Name']}" 
+                            for _, row in registered.iterrows() 
+                            if row['Status'] == 'Active']
+                    
+                    if time not in schedule:
+                        schedule[time] = {d: '' for d in days}
+                    schedule[time][day] = ', '.join(names)
+
+    # Convert to DataFrame
+    schedule_df = pd.DataFrame.from_dict(schedule, orient='index')
+    schedule_df.index.name = 'Time'
+    schedule_df.reset_index(inplace=True)
+    
+    # Sort by time
+    def time_key(t):
+        try:
+            return datetime.strptime(t, '%I:%M %p')
+        except:
+            return datetime.strptime('12:00 AM', '%I:%M %p')
+    
+    schedule_df = schedule_df.sort_values(
+        by='Time',
+        key=lambda x: pd.Series(x).apply(time_key)
+    )
+    
+    return schedule_df
+
 def get_location(day, time_str):
     """Determine location based on day and time"""
     try:
-        # Convert 12-hour time to 24-hour for comparison
-        time_parts = time_str.replace("  ", " ").split()
-        if len(time_parts) < 2:
-            return None
-            
-        time = time_parts[0]
-        ampm = time_parts[1].lower()
+        # Parse the time
+        time = datetime.strptime(time_str.lower(), '%I:%M %p').time()
+        hour = time.hour
         
-        hour = int(time.split(":")[0])
-        if ampm == "pm" and hour != 12:
-            hour += 12
-        elif ampm == "am" and hour == 12:
-            hour = 0
-            
         day = day.lower()
         
         # Torrance: Monday 9am to Wednesday 5pm
@@ -42,39 +98,13 @@ def get_location(day, time_str):
             return 'Manhattan Beach'
         
         return None
-    except Exception as e:
-        print(f"Error in get_location: {e} for day={day}, time={time_str}")
+    except:
         return None
-
-def add_location_colors(df):
-    """Add background colors based on location"""
-    days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-    styled_df = df.style
-    
-    # Add background colors
-    def apply_colors(row):
-        colors = []
-        for col in df.columns:
-            if col == 'Time':
-                colors.append('')
-            else:
-                location = get_location(col, row['Time'])
-                if location == 'Torrance':
-                    colors.append('background-color: #E6F3FF')
-                elif location == 'Manhattan Beach':
-                    colors.append('background-color: #E6FFE6')
-                else:
-                    colors.append('')
-        return colors
-    
-    styled_df = df.style.apply(apply_colors, axis=1)
-    return styled_df
 
 def export_to_excel(df):
     """Create formatted Excel file"""
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-        # Write the data
         df.to_excel(writer, sheet_name='Schedule', index=False)
         worksheet = writer.sheets['Schedule']
         
@@ -108,22 +138,35 @@ def main():
     """)
     
     # File upload
-    uploaded_file = st.file_uploader("Upload schedule CSV file", type=['csv'])
+    uploaded_file = st.file_uploader("Upload registration CSV file", type=['csv'])
     
     if uploaded_file:
         try:
-            # Read CSV data
+            # Read registration data
             df = pd.read_csv(uploaded_file)
             
-            # Verify required columns
-            required_columns = ['Time', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-            if not all(col in df.columns for col in required_columns):
-                st.error("CSV file must contain columns: Time, Monday, Tuesday, Wednesday, Thursday, Friday, Saturday")
-                return
+            # Process into schedule format
+            schedule_df = process_registrations(df)
             
-            # Display schedule with colors
+            # Display schedule with formatting
             st.markdown("### Current Schedule")
-            styled_df = add_location_colors(df)
+            
+            # Color formatting for display
+            def color_cells(val, time, col_name):
+                if col_name == 'Time':
+                    return ''
+                location = get_location(col_name, time)
+                if location == 'Torrance':
+                    return 'background-color: #E6F3FF'
+                elif location == 'Manhattan Beach':
+                    return 'background-color: #E6FFE6'
+                return ''
+            
+            styled_df = schedule_df.style.apply(
+                lambda row: [color_cells(val, row['Time'], col) for col in schedule_df.columns], 
+                axis=1
+            )
+            
             st.dataframe(
                 styled_df,
                 hide_index=True,
@@ -133,7 +176,7 @@ def main():
             # Export button
             col1, col2 = st.columns([1, 5])
             with col1:
-                excel_file = export_to_excel(df)
+                excel_file = export_to_excel(schedule_df)
                 st.download_button(
                     label="Download Excel",
                     data=excel_file.getvalue(),
@@ -144,16 +187,17 @@ def main():
             # Show last update time
             st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             
-            # Debug information
-            if st.checkbox("Show Debug Info"):
-                st.write("Columns in file:", df.columns.tolist())
-                st.write("First few rows:", df.head())
-                
         except Exception as e:
             st.error(f"Error processing file: {str(e)}")
             st.write("Error details:", e)
+            
+            # Debug information
+            if st.checkbox("Show Debug Info"):
+                st.write("Columns in file:", df.columns.tolist())
+                time_cols = [col for col in df.columns if 'am' in col.lower() or 'pm' in col.lower()]
+                st.write("Time columns found:", time_cols[:10], "...")
     else:
-        st.info("Please upload a CSV file to view the schedule")
+        st.info("Please upload a registration CSV file to view the schedule")
 
 if __name__ == "__main__":
     main()
