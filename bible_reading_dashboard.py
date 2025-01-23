@@ -152,20 +152,22 @@ def main():
             st.markdown("### Current Schedule")
             
             # Color formatting for display
-            def color_cells(val, time, col_name):
-                if col_name == 'Time':
-                    return ''
-                location = get_location(col_name, time)
-                if location == 'Torrance':
-                    return 'background-color: #E6F3FF'
-                elif location == 'Manhattan Beach':
-                    return 'background-color: #E6FFE6'
-                return ''
+            def color_cells(row):
+                colors = []
+                for col in schedule_df.columns:
+                    if col == 'Time':
+                        colors.append('')
+                    else:
+                        location = get_location(col, row['Time'])
+                        if location == 'Torrance':
+                            colors.append('background-color: #E6F3FF')
+                        elif location == 'Manhattan Beach':
+                            colors.append('background-color: #E6FFE6')
+                        else:
+                            colors.append('')
+                return colors
             
-            styled_df = schedule_df.style.apply(
-                lambda row: [color_cells(val, row['Time'], col) for col in schedule_df.columns], 
-                axis=1
-            )
+            styled_df = schedule_df.style.apply(color_cells, axis=1)
             
             st.dataframe(
                 styled_df,
