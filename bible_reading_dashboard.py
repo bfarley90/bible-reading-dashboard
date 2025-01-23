@@ -47,11 +47,33 @@ def extract_time_columns(df):
             time_cols.append(col)
     return time_cols
 
+def standardize_time_format(time_str):
+    """Standardize time string format"""
+    # Split into components
+    parts = time_str.split()
+    
+    # Handle cases where am/pm is attached to time
+    if len(parts) == 3 and ('am' in parts[0].lower() or 'pm' in parts[0].lower()):
+        time = parts[0]
+        # Insert space before am/pm
+        if 'am' in time.lower():
+            time = time.lower().replace('am', ' am')
+        if 'pm' in time.lower():
+            time = time.lower().replace('pm', ' pm')
+        # Reconstruct string
+        return f"{time} {parts[1]} {parts[2]}"
+    
+    return time_str
+
 def process_registrations(df):
     """Process registration data into schedule format"""
-    # Get all unique time slots from column names
+    # Get all unique time slots from column names and standardize format
     time_cols = extract_time_columns(df)
-    time_slots = sorted(time_cols, key=lambda x: datetime.strptime(x, '%I:%M %p %b %d'))
+    standardized_times = {col: standardize_time_format(col) for col in time_cols}
+    
+    # Sort time slots
+    time_slots = sorted(time_cols, 
+                       key=lambda x: datetime.strptime(standardize_time_format(x), '%I:%M %p %b %d'))
     
     days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
     
@@ -60,7 +82,7 @@ def process_registrations(df):
     
     for time_slot in time_slots:
         # Extract just the time part for display
-        display_time = ' '.join(time_slot.split()[:2])
+        display_time = ' '.join(standardize_time_format(time_slot).split()[:2])
         row = {'Time': display_time}
         
         for day in days:
